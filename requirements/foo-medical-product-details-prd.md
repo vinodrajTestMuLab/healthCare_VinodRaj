@@ -5,8 +5,15 @@
 **Product:** Foo Medical  
 **Type:** Synthetic healthcare patient portal / EHR-style web application  
 **Primary user:** Patient  
+**Application URL:** https://foomedical.com/
 
 ---
+
+## Application Access
+
+Foo Medical is available as a publicly accessible healthcare demonstration application.
+
+**Application URL:** https://foomedical.com/
 
 ## 1. Product Overview
 
