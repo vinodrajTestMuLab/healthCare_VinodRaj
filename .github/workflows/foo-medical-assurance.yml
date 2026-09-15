@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ---------------------------------------------------------
-      # 1. Checkout
+      # 1. Checkout repository
       # ---------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
           kane-cli --version
 
       # ---------------------------------------------------------
-      # 4. Authenticate
+      # 4. Authenticate with TestMu AI
       # ---------------------------------------------------------
       - name: Authenticate with TestMu AI
         env:
@@ -54,12 +54,7 @@ jobs:
             --access-key "$LT_ACCESS_KEY"
 
       # ---------------------------------------------------------
-      # 5. Ingest Foo Medical PRD and extract use cases
-      #
-      # --mode override is intentional here because this workflow
-      # is designed to bootstrap the demo from PRD-only input.
-      # It allows the AI to proceed unattended when it encounters
-      # ambiguity instead of stopping for a human.
+      # 5. Ingest Foo Medical PRD
       # ---------------------------------------------------------
       - name: Ingest Foo Medical PRD
         run: |
@@ -69,60 +64,64 @@ jobs:
             --mode override
 
       # ---------------------------------------------------------
-      # 6. Show extracted use cases
+      # 6. Extract use cases from PRD
       # ---------------------------------------------------------
-      - name: Extracted use cases
+      - name: Extract Foo Medical use cases
         shell: bash
         run: |
+          set -euo pipefail
+
           mkdir -p .artifacts
+
           kane-cli context list \
             --type usecase \
             --inferred \
             --json | tee .artifacts/usecases.ndjson
 
       # ---------------------------------------------------------
-      # 7. Design tests for every extracted use case
+      # 7. Design tests for all extracted use cases
       #
-      # --allow-unreviewed is intentional for this bootstrap/demo
-      # pipeline because the PRD is the only initial input.
+      # IMPORTANT:
+      # context list returns:
+      # {"id":"uc-1", ...}
       #
-      # --mode override makes design fully unattended.
-      # --max 8 keeps each use case bounded for CI/demo cost.
+      # Therefore we extract "id", not "ref".
       # ---------------------------------------------------------
       - name: Design Foo Medical tests
         shell: bash
         run: |
           set -euo pipefail
 
-          refs=$(
-            grep -oE '"ref"[[:space:]]*:[[:space:]]*"[^"]+"' \
+          ids=$(
+            grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' \
               .artifacts/usecases.ndjson \
-              | sed -E 's/.*"ref"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' \
+              | sed -E 's/.*"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' \
               | sort -u
           )
 
-          if [ -z "$refs" ]; then
+          if [ -z "$ids" ]; then
             echo "No use cases were extracted from the Foo Medical PRD."
             exit 1
           fi
 
           echo "Use cases to design:"
-          printf '%s\n' "$refs"
+          printf '%s\n' "$ids"
 
-          while IFS= read -r ref; do
-            [ -z "$ref" ] && continue
+          while IFS= read -r id; do
+            [ -z "$id" ] && continue
 
             echo ""
             echo "============================================================"
-            echo "Designing tests for: $ref"
+            echo "Designing tests for use case: $id"
             echo "============================================================"
 
             kane-cli design tests \
-              --use-case "$ref" \
+              --use-case "$id" \
               --max 8 \
               --allow-unreviewed \
               --mode override
-          done <<< "$refs"
+
+          done <<< "$ids"
 
       # ---------------------------------------------------------
       # 8. List generated tests
@@ -132,13 +131,9 @@ jobs:
           kane-cli testmd list
 
       # ---------------------------------------------------------
-      # 9. Author each generated test once
-      #
-      # Designed tests are written under .testmuai/tests/.
-      # Their first testmd run creates the browser recording that
-      # subsequent CI executions can replay.
+      # 9. Verify generated test files exist
       # ---------------------------------------------------------
-      - name: Author generated tests
+      - name: Verify generated tests
         shell: bash
         run: |
           set -euo pipefail
@@ -152,12 +147,29 @@ jobs:
 
           if [ "${#tests[@]}" -eq 0 ]; then
             echo "No generated *_test.md files were found."
+            echo "Test design did not produce executable Kane tests."
             exit 1
           fi
 
-          echo "Generated ${#tests[@]} test(s)."
+          echo "Generated ${#tests[@]} test(s):"
 
           for test_file in "${tests[@]}"; do
+            echo " - $test_file"
+          done
+
+      # ---------------------------------------------------------
+      # 10. Author generated tests
+      #
+      # The generated tests must be authored once against the
+      # Foo Medical application before replay/batch execution.
+      # ---------------------------------------------------------
+      - name: Author generated Foo Medical tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r -d '' test_file; do
+
             echo ""
             echo "============================================================"
             echo "Authoring: $test_file"
@@ -169,11 +181,16 @@ jobs:
               --author \
               --url "https://foomedical.com/" \
               --on-lock-conflict wait
-          done
+
+          done < <(
+            find .testmuai/tests \
+              -type f \
+              -name '*_test.md' \
+              -print0
+          )
 
       # ---------------------------------------------------------
-      # 10. Run the complete generated suite as one execution
-      #     This produces the main sealed evidence pack.
+      # 11. Run complete Foo Medical assurance suite
       # ---------------------------------------------------------
       - name: Run Foo Medical assurance suite
         run: |
@@ -183,19 +200,21 @@ jobs:
             --on-failure fail-fast
 
       # ---------------------------------------------------------
-      # 11. Show generated evidence
+      # 12. Show generated evidence
       # ---------------------------------------------------------
       - name: Show evidence files
         if: always()
+        shell: bash
         run: |
           echo "Evidence generated under .testmuai/evidence/"
+
           find .testmuai/evidence \
             -maxdepth 2 \
             -type f \
             -print 2>/dev/null || true
 
       # ---------------------------------------------------------
-      # 12. Validate all evidence packs
+      # 13. Validate evidence packs
       # ---------------------------------------------------------
       - name: Validate evidence packs
         if: always()
@@ -204,6 +223,7 @@ jobs:
           set -euo pipefail
 
           shopt -s nullglob
+
           packs=(.testmuai/evidence/*.evidence)
 
           if [ ${#packs[@]} -eq 0 ]; then
@@ -215,7 +235,9 @@ jobs:
 
           for pack in "${packs[@]}"; do
             echo ""
-            echo "Validating: $pack"
+            echo "============================================================"
+            echo "Validating evidence pack: $pack"
+            echo "============================================================"
 
             if ! kane-cli evidence validate "$pack" --json; then
               validation_failed=1
@@ -223,24 +245,32 @@ jobs:
           done
 
           if [ "$validation_failed" -ne 0 ]; then
+            echo ""
             echo "One or more evidence packs failed validation."
             exit 1
           fi
 
+          echo ""
+          echo "All evidence packs passed validation."
+
       # ---------------------------------------------------------
-      # 13. Calculate Assurance coverage
+      # 14. Generate assurance coverage
       # ---------------------------------------------------------
-      - name: Calculate Foo Medical coverage
+      - name: Generate Foo Medical assurance coverage
         if: always()
         shell: bash
         run: |
+          set -euo pipefail
+
           mkdir -p .artifacts
 
           echo "Generating assurance coverage..."
-          kane-cli cover --json | tee .artifacts/coverage.json
+
+          kane-cli cover --json \
+            | tee .artifacts/coverage.json
 
       # ---------------------------------------------------------
-      # 14. Upload everything useful for the demo
+      # 15. Upload Kane CLI artifacts
       # ---------------------------------------------------------
       - name: Upload Kane CLI assurance artifacts
         if: always()
@@ -252,7 +282,7 @@ jobs:
             .context/
             .testmuai/tests/
             .testmuai/evidence/
-            .testmuai/tests/**/Result.md
-            .testmuai/tests/**/output-*/
+            tests/**/Result.md
+            tests/**/output-*/
           if-no-files-found: warn
           retention-days: 14
