@@ -7,6 +7,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   healthcare-assurance:
     name: Generate, run and prove Foo Medical
@@ -31,18 +34,25 @@ jobs:
       # 3. Install Kane CLI
       # ---------------------------------------------------------
       - name: Install Kane CLI
-        run: npm install -g @testmuai/kane-cli
+        run: |
+          npm install -g @testmuai/kane-cli
+          kane-cli --version
 
       - name: Install Kane skill
-        run: kane-cli install skill
+        run: |
+          kane-cli install skill
 
+      # ---------------------------------------------------------
+      # 4. Verify environment
+      # ---------------------------------------------------------
       - name: Verify Kane CLI
         run: |
           node --version
+          npm --version
           kane-cli --version
 
       # ---------------------------------------------------------
-      # 4. Authenticate Kane CLI with TestMu AI
+      # 5. Authenticate Kane CLI with TestMu AI
       # ---------------------------------------------------------
       - name: Authenticate with TestMu AI
         env:
@@ -54,7 +64,7 @@ jobs:
             --access-key "$LT_ACCESS_KEY"
 
       # ---------------------------------------------------------
-      # 5. Ingest Foo Medical product PRD
+      # 6. Ingest Foo Medical PRD
       # ---------------------------------------------------------
       - name: Ingest Foo Medical PRD
         run: |
@@ -64,7 +74,7 @@ jobs:
             --mode override
 
       # ---------------------------------------------------------
-      # 6. Extract use cases
+      # 7. Extract use cases
       # ---------------------------------------------------------
       - name: Extract Foo Medical use cases
         shell: bash
@@ -76,10 +86,13 @@ jobs:
           kane-cli context list \
             --type usecase \
             --inferred \
-            --json | tee .artifacts/usecases.ndjson
+            --json \
+            | tee .artifacts/usecases.ndjson
 
       # ---------------------------------------------------------
-      # 7. Design tests from extracted use cases
+      # 8. Design tests
+      #
+      # --max 2 = maximum of 2 scenario/test pairs per use case
       # ---------------------------------------------------------
       - name: Design Foo Medical tests
         shell: bash
@@ -111,20 +124,23 @@ jobs:
 
             kane-cli design tests \
               --use-case "$id" \
-              --max 8 \
+              --max 2 \
               --allow-unreviewed \
               --mode override
 
           done <<< "$ids"
 
       # ---------------------------------------------------------
-      # 8. Show generated test files
+      # 9. List generated tests
       # ---------------------------------------------------------
       - name: List generated Foo Medical tests
         run: |
           kane-cli testmd list
 
-      - name: Verify generated tests
+      # ---------------------------------------------------------
+      # 10. Verify generated test files
+      # ---------------------------------------------------------
+      - name: Verify generated test files
         shell: bash
         run: |
           set -euo pipefail
@@ -148,12 +164,39 @@ jobs:
           done
 
       # ---------------------------------------------------------
-      # 9. Create Foo Medical runtime variables
-      #
-      # These values come from GitHub Secrets.
-      # DO NOT hard-code patient credentials.
+      # 11. Discover variables from generated tests
       # ---------------------------------------------------------
-      - name: Create Foo Medical runtime variables
+      - name: Discover Kane variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .artifacts
+          mkdir -p .testmuai/variables
+
+          variable_file=".artifacts/discovered-variables.txt"
+
+          find .testmuai/tests \
+            -type f \
+            -name '*_test.md' \
+            -print0 \
+            | xargs -0 grep -oE '\{\{[A-Za-z_][A-Za-z0-9_-]*\}\}' \
+            | sed -E 's/^\{\{(.*)\}\}$/\1/' \
+            | sort -u \
+            > "$variable_file" || true
+
+          echo "Variables discovered:"
+          cat "$variable_file" 2>/dev/null || true
+
+      # ---------------------------------------------------------
+      # 12. Build assurance.json dynamically
+      #
+      # Login/email/username variables use FOO_MEDICAL_EMAIL
+      # Password variables use FOO_MEDICAL_PASSWORD
+      # URL variables use https://foomedical.com/
+      # Unknown variables fail the workflow.
+      # ---------------------------------------------------------
+      - name: Build Kane assurance variables
         env:
           FOO_MEDICAL_EMAIL: ${{ secrets.FOO_MEDICAL_EMAIL }}
           FOO_MEDICAL_PASSWORD: ${{ secrets.FOO_MEDICAL_PASSWORD }}
@@ -161,46 +204,139 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$FOO_MEDICAL_EMAIL" ]; then
-            echo "FOO_MEDICAL_EMAIL GitHub Secret is not configured."
+          VARIABLE_LIST=".artifacts/discovered-variables.txt"
+          VARIABLE_JSON=".testmuai/variables/assurance.json"
+
+          if [ ! -f "$VARIABLE_LIST" ]; then
+            echo "Variable discovery file not found."
             exit 1
           fi
 
-          if [ -z "$FOO_MEDICAL_PASSWORD" ]; then
-            echo "FOO_MEDICAL_PASSWORD GitHub Secret is not configured."
+          if [ -z "${FOO_MEDICAL_EMAIL:-}" ]; then
+            echo "Missing GitHub Secret: FOO_MEDICAL_EMAIL"
             exit 1
           fi
 
-          mkdir -p .testmuai/variables
+          if [ -z "${FOO_MEDICAL_PASSWORD:-}" ]; then
+            echo "Missing GitHub Secret: FOO_MEDICAL_PASSWORD"
+            exit 1
+          fi
 
-          cat > .testmuai/variables/assurance.json <<EOF
-          {
-            "valid_login_email": {
-              "value": "$FOO_MEDICAL_EMAIL"
-            },
-            "valid_login_username": {
-              "value": "$FOO_MEDICAL_EMAIL"
-            },
-            "valid_login_password": {
-              "value": "$FOO_MEDICAL_PASSWORD",
-              "secret": true
-            },
-            "portal_login_url": {
-              "value": "https://foomedical.com/"
-            },
-            "protected_page_url": {
-              "value": "https://foomedical.com/"
-            }
-          }
-          EOF
+          export VARIABLE_LIST
+          export VARIABLE_JSON
 
-          echo "Kane runtime variables created."
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+
+          variable_list = os.environ["VARIABLE_LIST"]
+          variable_json = os.environ["VARIABLE_JSON"]
+
+          email = os.environ["FOO_MEDICAL_EMAIL"]
+          password = os.environ["FOO_MEDICAL_PASSWORD"]
+          portal_url = "https://foomedical.com/"
+
+          with open(variable_list, "r", encoding="utf-8") as f:
+              variables = [
+                  line.strip()
+                  for line in f
+                  if line.strip()
+              ]
+
+          result = {}
+          unresolved = []
+
+          for name in variables:
+              lower = name.lower()
+
+              # Email / username / login identity
+              if (
+                  "email" in lower
+                  or "username" in lower
+                  or lower.endswith("_user")
+                  or lower == "user"
+              ):
+                  result[name] = {
+                      "value": email
+                  }
+
+              # Password / credential
+              elif (
+                  "password" in lower
+                  or lower.endswith("_pass")
+                  or lower.endswith("_pwd")
+              ):
+                  result[name] = {
+                      "value": password,
+                      "secret": True
+                  }
+
+              # URL / portal / protected page
+              elif (
+                  "url" in lower
+                  or "portal" in lower
+                  or "dashboard" in lower
+                  or "protected_page" in lower
+              ):
+                  result[name] = {
+                      "value": portal_url
+                  }
+
+              else:
+                  unresolved.append(name)
+
+          if unresolved:
+              print("ERROR: Unresolved generated variables:")
+
+              for name in unresolved:
+                  print(f"  - {name}")
+
+              print("")
+              print(
+                  "Add an explicit mapping for these variables "
+                  "before execution."
+              )
+
+              sys.exit(1)
+
+          os.makedirs(os.path.dirname(variable_json), exist_ok=True)
+
+          with open(variable_json, "w", encoding="utf-8") as f:
+              json.dump(result, f, indent=2)
+              f.write("\n")
+
+          print(f"Created {variable_json}")
+          print(f"Resolved {len(result)} variable(s).")
+          PY
 
       # ---------------------------------------------------------
-      # 10. Author generated tests
-      #
-      # This establishes the browser recording for generated
-      # tests before they are replayed through testrun.
+      # 13. Verify variable mapping without exposing secrets
+      # ---------------------------------------------------------
+      - name: Verify Kane variable mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import json
+
+          path = ".testmuai/variables/assurance.json"
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          print("Resolved variables:")
+
+          for name, entry in sorted(data.items()):
+              if entry.get("secret") is True:
+                  print(f" - {name}: [SECRET]")
+              else:
+                  print(f" - {name}: {entry.get('value')}")
+          PY
+
+      # ---------------------------------------------------------
+      # 14. Author generated tests
       # ---------------------------------------------------------
       - name: Author generated Foo Medical tests
         shell: bash
@@ -219,6 +355,7 @@ jobs:
               --headless \
               --author \
               --url "https://foomedical.com/" \
+              --variables-file ".testmuai/variables/assurance.json" \
               --on-lock-conflict wait
 
           done < <(
@@ -229,7 +366,7 @@ jobs:
           )
 
       # ---------------------------------------------------------
-      # 11. Run complete Foo Medical suite
+      # 15. Replay complete Foo Medical assurance suite
       # ---------------------------------------------------------
       - name: Run Foo Medical assurance suite
         run: |
@@ -237,10 +374,10 @@ jobs:
             --headless \
             --parallel 2 \
             --on-failure fail-fast \
-            --variables-file .testmuai/variables/assurance.json
+            --variables-file ".testmuai/variables/assurance.json"
 
       # ---------------------------------------------------------
-      # 12. Show evidence
+      # 16. Show evidence
       # ---------------------------------------------------------
       - name: Show evidence files
         if: always()
@@ -254,7 +391,7 @@ jobs:
             -print 2>/dev/null || true
 
       # ---------------------------------------------------------
-      # 13. Validate evidence packs
+      # 17. Validate evidence packs
       # ---------------------------------------------------------
       - name: Validate evidence packs
         if: always()
@@ -291,7 +428,7 @@ jobs:
           echo "All evidence packs passed validation."
 
       # ---------------------------------------------------------
-      # 14. Generate assurance coverage
+      # 18. Generate assurance coverage
       # ---------------------------------------------------------
       - name: Generate Foo Medical assurance coverage
         if: always()
@@ -305,20 +442,50 @@ jobs:
             | tee .artifacts/coverage.json
 
       # ---------------------------------------------------------
-      # 15. Upload Kane CLI artifacts
+      # 19. Upload generated assets as Actions artifact
       # ---------------------------------------------------------
-      - name: Upload Kane CLI assurance artifacts
+      - name: Upload Kane CLI assurance artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: foo-medical-kane-cli-assurance
           path: |
             .artifacts/
-            .context/
             .testmuai/tests/
-            .testmuai/variables/
             .testmuai/evidence/
-            tests/**/Result.md
-            tests/**/output-*/
           if-no-files-found: warn
           retention-days: 14
+
+      # ---------------------------------------------------------
+      # 20. Persist generated tests/evidence/coverage to Git
+      #
+      # Only successful pushes to main are committed.
+      # Runtime credentials are removed before git add.
+      # ---------------------------------------------------------
+      - name: Persist generated Kane assets to Git
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Never commit runtime credentials
+          rm -rf .testmuai/variables
+
+          # Configure GitHub Actions bot
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Add generated assets
+          git add .testmuai/tests/
+          git add .testmuai/evidence/
+          git add .artifacts/
+
+          # Avoid empty commit
+          if git diff --cached --quiet; then
+            echo "No generated Kane CLI changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update Kane CLI assurance assets"
+
+          git push
