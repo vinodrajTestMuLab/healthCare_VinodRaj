@@ -9,18 +9,27 @@ on:
 
 jobs:
   healthcare-assurance:
-    name: Run healthcare assurance suite
+    name: Generate, run and prove Foo Medical
     runs-on: ubuntu-latest
 
     steps:
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------
+      # 2. Setup Node.js
+      # ---------------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
+      # ---------------------------------------------------------
+      # 3. Install Kane CLI
+      # ---------------------------------------------------------
       - name: Install Kane CLI
         run: npm install -g @testmuai/kane-cli
 
@@ -32,30 +41,168 @@ jobs:
           node --version
           kane-cli --version
 
+      # ---------------------------------------------------------
+      # 4. Authenticate
+      # ---------------------------------------------------------
       - name: Authenticate with TestMu AI
         env:
           LT_USERNAME: ${{ secrets.LT_USERNAME }}
           LT_ACCESS_KEY: ${{ secrets.LT_ACCESS_KEY }}
         run: |
-          kane-cli login             --username "$LT_USERNAME"             --access-key "$LT_ACCESS_KEY"
+          kane-cli login \
+            --username "$LT_USERNAME" \
+            --access-key "$LT_ACCESS_KEY"
 
-      - name: List committed Foo Medical tests
-        run: kane-cli testmd list
+      # ---------------------------------------------------------
+      # 5. Ingest Foo Medical PRD and extract use cases
+      #
+      # --mode override is intentional here because this workflow
+      # is designed to bootstrap the demo from PRD-only input.
+      # It allows the AI to proceed unattended when it encounters
+      # ambiguity instead of stopping for a human.
+      # ---------------------------------------------------------
+      - name: Ingest Foo Medical PRD
+        run: |
+          kane-cli context ingest \
+            ./requirements/foo-medical-prd.md \
+            --as foo-medical-prd \
+            --mode override
 
+      # ---------------------------------------------------------
+      # 6. Show extracted use cases
+      # ---------------------------------------------------------
+      - name: Extracted use cases
+        shell: bash
+        run: |
+          mkdir -p .artifacts
+          kane-cli context list \
+            --type usecase \
+            --inferred \
+            --json | tee .artifacts/usecases.ndjson
+
+      # ---------------------------------------------------------
+      # 7. Design tests for every extracted use case
+      #
+      # --allow-unreviewed is intentional for this bootstrap/demo
+      # pipeline because the PRD is the only initial input.
+      #
+      # --mode override makes design fully unattended.
+      # --max 8 keeps each use case bounded for CI/demo cost.
+      # ---------------------------------------------------------
+      - name: Design Foo Medical tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          refs=$(
+            grep -oE '"ref"[[:space:]]*:[[:space:]]*"[^"]+"' \
+              .artifacts/usecases.ndjson \
+              | sed -E 's/.*"ref"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' \
+              | sort -u
+          )
+
+          if [ -z "$refs" ]; then
+            echo "No use cases were extracted from the Foo Medical PRD."
+            exit 1
+          fi
+
+          echo "Use cases to design:"
+          printf '%s\n' "$refs"
+
+          while IFS= read -r ref; do
+            [ -z "$ref" ] && continue
+
+            echo ""
+            echo "============================================================"
+            echo "Designing tests for: $ref"
+            echo "============================================================"
+
+            kane-cli design tests \
+              --use-case "$ref" \
+              --max 8 \
+              --allow-unreviewed \
+              --mode override
+          done <<< "$refs"
+
+      # ---------------------------------------------------------
+      # 8. List generated tests
+      # ---------------------------------------------------------
+      - name: List generated Foo Medical tests
+        run: |
+          kane-cli testmd list
+
+      # ---------------------------------------------------------
+      # 9. Author each generated test once
+      #
+      # Designed tests are written under .testmuai/tests/.
+      # Their first testmd run creates the browser recording that
+      # subsequent CI executions can replay.
+      # ---------------------------------------------------------
+      - name: Author generated tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -d '' tests < <(
+            find .testmuai/tests \
+              -type f \
+              -name '*_test.md' \
+              -print0
+          )
+
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "No generated *_test.md files were found."
+            exit 1
+          fi
+
+          echo "Generated ${#tests[@]} test(s)."
+
+          for test_file in "${tests[@]}"; do
+            echo ""
+            echo "============================================================"
+            echo "Authoring: $test_file"
+            echo "============================================================"
+
+            kane-cli testmd run "$test_file" \
+              --agent \
+              --headless \
+              --author \
+              --url "https://foomedical.com/" \
+              --on-lock-conflict wait
+          done
+
+      # ---------------------------------------------------------
+      # 10. Run the complete generated suite as one execution
+      #     This produces the main sealed evidence pack.
+      # ---------------------------------------------------------
       - name: Run Foo Medical assurance suite
         run: |
-          kane-cli testrun run             --headless             --on-failure fail-fast
+          kane-cli testrun run \
+            --headless \
+            --parallel 2 \
+            --on-failure fail-fast
 
+      # ---------------------------------------------------------
+      # 11. Show generated evidence
+      # ---------------------------------------------------------
       - name: Show evidence files
         if: always()
         run: |
           echo "Evidence generated under .testmuai/evidence/"
-          find .testmuai/evidence -maxdepth 2 -type f -print 2>/dev/null || true
+          find .testmuai/evidence \
+            -maxdepth 2 \
+            -type f \
+            -print 2>/dev/null || true
 
+      # ---------------------------------------------------------
+      # 12. Validate all evidence packs
+      # ---------------------------------------------------------
       - name: Validate evidence packs
         if: always()
         shell: bash
         run: |
+          set -euo pipefail
+
           shopt -s nullglob
           packs=(.testmuai/evidence/*.evidence)
 
@@ -67,8 +214,12 @@ jobs:
           validation_failed=0
 
           for pack in "${packs[@]}"; do
-            echo "Validating $pack"
-            kane-cli evidence validate "$pack" --json || validation_failed=1
+            echo ""
+            echo "Validating: $pack"
+
+            if ! kane-cli evidence validate "$pack" --json; then
+              validation_failed=1
+            fi
           done
 
           if [ "$validation_failed" -ne 0 ]; then
@@ -76,14 +227,32 @@ jobs:
             exit 1
           fi
 
-      - name: Upload Kane CLI evidence
+      # ---------------------------------------------------------
+      # 13. Calculate Assurance coverage
+      # ---------------------------------------------------------
+      - name: Calculate Foo Medical coverage
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .artifacts
+
+          echo "Generating assurance coverage..."
+          kane-cli cover --json | tee .artifacts/coverage.json
+
+      # ---------------------------------------------------------
+      # 14. Upload everything useful for the demo
+      # ---------------------------------------------------------
+      - name: Upload Kane CLI assurance artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: foo-medical-kane-cli-evidence
+          name: foo-medical-kane-cli-assurance
           path: |
+            .artifacts/
+            .context/
+            .testmuai/tests/
             .testmuai/evidence/
-            tests/**/Result.md
-            tests/**/output-*/
+            .testmuai/tests/**/Result.md
+            .testmuai/tests/**/output-*/
           if-no-files-found: warn
           retention-days: 14
