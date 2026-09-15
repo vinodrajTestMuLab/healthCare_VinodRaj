@@ -1,0 +1,89 @@
+name: Foo Medical - Kane CLI Assurance
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  healthcare-assurance:
+    name: Run healthcare assurance suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Kane CLI
+        run: npm install -g @testmuai/kane-cli
+
+      - name: Install Kane skill
+        run: kane-cli install skill
+
+      - name: Verify Kane CLI
+        run: |
+          node --version
+          kane-cli --version
+
+      - name: Authenticate with TestMu AI
+        env:
+          LT_USERNAME: ${{ secrets.LT_USERNAME }}
+          LT_ACCESS_KEY: ${{ secrets.LT_ACCESS_KEY }}
+        run: |
+          kane-cli login             --username "$LT_USERNAME"             --access-key "$LT_ACCESS_KEY"
+
+      - name: List committed Foo Medical tests
+        run: kane-cli testmd list
+
+      - name: Run Foo Medical assurance suite
+        run: |
+          kane-cli testrun run             --headless             --on-failure fail-fast
+
+      - name: Show evidence files
+        if: always()
+        run: |
+          echo "Evidence generated under .testmuai/evidence/"
+          find .testmuai/evidence -maxdepth 2 -type f -print 2>/dev/null || true
+
+      - name: Validate evidence packs
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packs=(.testmuai/evidence/*.evidence)
+
+          if [ ${#packs[@]} -eq 0 ]; then
+            echo "No .evidence pack was generated."
+            exit 1
+          fi
+
+          validation_failed=0
+
+          for pack in "${packs[@]}"; do
+            echo "Validating $pack"
+            kane-cli evidence validate "$pack" --json || validation_failed=1
+          done
+
+          if [ "$validation_failed" -ne 0 ]; then
+            echo "One or more evidence packs failed validation."
+            exit 1
+          fi
+
+      - name: Upload Kane CLI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo-medical-kane-cli-evidence
+          path: |
+            .testmuai/evidence/
+            tests/**/Result.md
+            tests/**/output-*/
+          if-no-files-found: warn
+          retention-days: 14
