@@ -42,7 +42,7 @@ jobs:
           kane-cli --version
 
       # ---------------------------------------------------------
-      # 4. Authenticate with TestMu AI
+      # 4. Authenticate Kane CLI with TestMu AI
       # ---------------------------------------------------------
       - name: Authenticate with TestMu AI
         env:
@@ -54,7 +54,7 @@ jobs:
             --access-key "$LT_ACCESS_KEY"
 
       # ---------------------------------------------------------
-      # 5. Ingest Foo Medical PRD
+      # 5. Ingest Foo Medical product PRD
       # ---------------------------------------------------------
       - name: Ingest Foo Medical PRD
         run: |
@@ -64,7 +64,7 @@ jobs:
             --mode override
 
       # ---------------------------------------------------------
-      # 6. Extract use cases from PRD
+      # 6. Extract use cases
       # ---------------------------------------------------------
       - name: Extract Foo Medical use cases
         shell: bash
@@ -79,13 +79,7 @@ jobs:
             --json | tee .artifacts/usecases.ndjson
 
       # ---------------------------------------------------------
-      # 7. Design tests for all extracted use cases
-      #
-      # IMPORTANT:
-      # context list returns:
-      # {"id":"uc-1", ...}
-      #
-      # Therefore we extract "id", not "ref".
+      # 7. Design tests from extracted use cases
       # ---------------------------------------------------------
       - name: Design Foo Medical tests
         shell: bash
@@ -124,15 +118,12 @@ jobs:
           done <<< "$ids"
 
       # ---------------------------------------------------------
-      # 8. List generated tests
+      # 8. Show generated test files
       # ---------------------------------------------------------
       - name: List generated Foo Medical tests
         run: |
           kane-cli testmd list
 
-      # ---------------------------------------------------------
-      # 9. Verify generated test files exist
-      # ---------------------------------------------------------
       - name: Verify generated tests
         shell: bash
         run: |
@@ -147,7 +138,6 @@ jobs:
 
           if [ "${#tests[@]}" -eq 0 ]; then
             echo "No generated *_test.md files were found."
-            echo "Test design did not produce executable Kane tests."
             exit 1
           fi
 
@@ -158,10 +148,59 @@ jobs:
           done
 
       # ---------------------------------------------------------
+      # 9. Create Foo Medical runtime variables
+      #
+      # These values come from GitHub Secrets.
+      # DO NOT hard-code patient credentials.
+      # ---------------------------------------------------------
+      - name: Create Foo Medical runtime variables
+        env:
+          FOO_MEDICAL_EMAIL: ${{ secrets.FOO_MEDICAL_EMAIL }}
+          FOO_MEDICAL_PASSWORD: ${{ secrets.FOO_MEDICAL_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "$FOO_MEDICAL_EMAIL" ]; then
+            echo "FOO_MEDICAL_EMAIL GitHub Secret is not configured."
+            exit 1
+          fi
+
+          if [ -z "$FOO_MEDICAL_PASSWORD" ]; then
+            echo "FOO_MEDICAL_PASSWORD GitHub Secret is not configured."
+            exit 1
+          fi
+
+          mkdir -p .testmuai/variables
+
+          cat > .testmuai/variables/assurance.json <<EOF
+          {
+            "valid_login_email": {
+              "value": "$FOO_MEDICAL_EMAIL"
+            },
+            "valid_login_username": {
+              "value": "$FOO_MEDICAL_EMAIL"
+            },
+            "valid_login_password": {
+              "value": "$FOO_MEDICAL_PASSWORD",
+              "secret": true
+            },
+            "portal_login_url": {
+              "value": "https://foomedical.com/"
+            },
+            "protected_page_url": {
+              "value": "https://foomedical.com/"
+            }
+          }
+          EOF
+
+          echo "Kane runtime variables created."
+
+      # ---------------------------------------------------------
       # 10. Author generated tests
       #
-      # The generated tests must be authored once against the
-      # Foo Medical application before replay/batch execution.
+      # This establishes the browser recording for generated
+      # tests before they are replayed through testrun.
       # ---------------------------------------------------------
       - name: Author generated Foo Medical tests
         shell: bash
@@ -190,17 +229,18 @@ jobs:
           )
 
       # ---------------------------------------------------------
-      # 11. Run complete Foo Medical assurance suite
+      # 11. Run complete Foo Medical suite
       # ---------------------------------------------------------
       - name: Run Foo Medical assurance suite
         run: |
           kane-cli testrun run \
             --headless \
             --parallel 2 \
-            --on-failure fail-fast
+            --on-failure fail-fast \
+            --variables-file .testmuai/variables/assurance.json
 
       # ---------------------------------------------------------
-      # 12. Show generated evidence
+      # 12. Show evidence
       # ---------------------------------------------------------
       - name: Show evidence files
         if: always()
@@ -223,7 +263,6 @@ jobs:
           set -euo pipefail
 
           shopt -s nullglob
-
           packs=(.testmuai/evidence/*.evidence)
 
           if [ ${#packs[@]} -eq 0 ]; then
@@ -245,12 +284,10 @@ jobs:
           done
 
           if [ "$validation_failed" -ne 0 ]; then
-            echo ""
             echo "One or more evidence packs failed validation."
             exit 1
           fi
 
-          echo ""
           echo "All evidence packs passed validation."
 
       # ---------------------------------------------------------
@@ -263,8 +300,6 @@ jobs:
           set -euo pipefail
 
           mkdir -p .artifacts
-
-          echo "Generating assurance coverage..."
 
           kane-cli cover --json \
             | tee .artifacts/coverage.json
@@ -281,6 +316,7 @@ jobs:
             .artifacts/
             .context/
             .testmuai/tests/
+            .testmuai/variables/
             .testmuai/evidence/
             tests/**/Result.md
             tests/**/output-*/
