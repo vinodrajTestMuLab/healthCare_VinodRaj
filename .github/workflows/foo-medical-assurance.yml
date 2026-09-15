@@ -14,7 +14,6 @@ assurance:
 name: Generate, run and prove Foo Medical
 runs-on: ubuntu-latest
 
-```
 env:
   FOO_MEDICAL_URL: https://foomedical.com/
 
