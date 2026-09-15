@@ -1,396 +1,449 @@
 name: Foo Medical - KaneCLI Assurance
 
 on:
-workflow_dispatch:
-push:
-branches:
-- main
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - ".testmuai/**"
+      - ".artifacts/**"
 
 permissions:
-contents: write
+  contents: write
 
 jobs:
-assurance:
-name: Generate, run and prove Foo Medical
-runs-on: ubuntu-latest
+  assurance:
+    name: Generate, run and prove Foo Medical
+    runs-on: ubuntu-latest
 
-env:
-  FOO_MEDICAL_URL: https://foomedical.com/
-
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
-
-  - name: Setup Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: 22
-
-  - name: Install KaneCLI
-    run: |
-      npm install -g @testmuai/kane-cli
-      kane-cli --version
-
-  - name: Install KaneCLI skill
-    run: |
-      kane-cli install skill
-
-  - name: Verify environment
-    run: |
-      node --version
-      npm --version
-      kane-cli --version
-
-  - name: Login to TestMu
     env:
-      LT_USERNAME: ${{ secrets.LT_USERNAME }}
-      LT_ACCESS_KEY: ${{ secrets.LT_ACCESS_KEY }}
-    run: |
-      if [ -z "${LT_USERNAME:-}" ]; then
-        echo "Missing GitHub Secret: LT_USERNAME"
-        exit 1
-      fi
+      FOO_MEDICAL_URL: https://foomedical.com/
 
-      if [ -z "${LT_ACCESS_KEY:-}" ]; then
-        echo "Missing GitHub Secret: LT_ACCESS_KEY"
-        exit 1
-      fi
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      kane-cli login \
-        --username "$LT_USERNAME" \
-        --access-key "$LT_ACCESS_KEY"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
-  - name: Ingest Foo Medical PRD
-    run: |
-      test -f ./requirements/foo-medical-prd.md
+      - name: Install KaneCLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @testmuai/kane-cli
+          kane-cli --version
 
-      kane-cli context ingest \
-        ./requirements/foo-medical-prd.md \
-        --as foo-medical-prd \
-        --mode override
+      - name: Install KaneCLI skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          kane-cli install skill
 
-  - name: List inferred use cases
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Verify environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Node version:"
+          node --version
+          echo "npm version:"
+          npm --version
+          echo "KaneCLI version:"
+          kane-cli --version
 
-      mkdir -p .artifacts
+      - name: Login to TestMu
+        shell: bash
+        env:
+          LT_USERNAME: ${{ secrets.LT_USERNAME }}
+          LT_ACCESS_KEY: ${{ secrets.LT_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
 
-      kane-cli context list \
-        --type usecase \
-        --inferred \
-        --json \
-        | tee .artifacts/usecases.ndjson
+          if [ -z "${LT_USERNAME:-}" ]; then
+            echo "ERROR: Missing GitHub Secret: LT_USERNAME"
+            exit 1
+          fi
 
-  - name: Design tests from use cases
-    shell: bash
-    run: |
-      set -euo pipefail
+          if [ -z "${LT_ACCESS_KEY:-}" ]; then
+            echo "ERROR: Missing GitHub Secret: LT_ACCESS_KEY"
+            exit 1
+          fi
 
-      ids="$(
-        grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' \
-          .artifacts/usecases.ndjson \
-          | sed -E 's/.*"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' \
-          | sort -u
-      )"
+          kane-cli login \
+            --username "$LT_USERNAME" \
+            --access-key "$LT_ACCESS_KEY"
 
-      if [ -z "$ids" ]; then
-        echo "No use cases were extracted from the Foo Medical PRD."
-        exit 1
-      fi
+      - name: Ingest Foo Medical PRD
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      echo "Use cases to design:"
-      printf '%s\n' "$ids"
+          if [ ! -f "./requirements/foo-medical-prd.md" ]; then
+            echo "ERROR: requirements/foo-medical-prd.md was not found."
+            exit 1
+          fi
 
-      while IFS= read -r id; do
-        [ -z "$id" ] && continue
+          kane-cli context ingest \
+            ./requirements/foo-medical-prd.md \
+            --as foo-medical-prd \
+            --mode override
 
-        echo ""
-        echo "============================================================"
-        echo "Designing tests for use case: $id"
-        echo "============================================================"
+      - name: List inferred use cases
+        shell: bash
+        run: |
+          set -euo pipefail
 
-        kane-cli design tests \
-          --use-case "$id" \
-          --max 2 \
-          --allow-unreviewed \
-          --mode override
+          mkdir -p .artifacts
 
-      done <<< "$ids"
+          kane-cli context list \
+            --type usecase \
+            --inferred \
+            --json \
+            | tee .artifacts/usecases.ndjson
 
-  - name: Verify generated tests
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Design tests from use cases
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      mapfile -d '' tests < <(
-        find .testmuai/tests \
-          -type f \
-          -name '*_test.md' \
-          -print0
-      )
+          ids="$(
+            grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' \
+              .artifacts/usecases.ndjson \
+              | sed -E 's/.*"id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' \
+              | sort -u
+          )"
 
-      if [ "${#tests[@]}" -eq 0 ]; then
-        echo "No generated *_test.md files were found."
-        exit 1
-      fi
+          if [ -z "$ids" ]; then
+            echo "ERROR: No use cases were extracted from the Foo Medical PRD."
+            exit 1
+          fi
 
-      echo "Generated ${#tests[@]} test(s):"
+          echo "Use cases to design:"
+          printf '%s\n' "$ids"
 
-      for test_file in "${tests[@]}"; do
-        echo " - $test_file"
-      done
+          while IFS= read -r id; do
+            [ -z "$id" ] && continue
 
-  - name: Discover generated variables
-    shell: bash
-    run: |
-      set -euo pipefail
+            echo ""
+            echo "============================================================"
+            echo "Designing tests for use case: $id"
+            echo "============================================================"
 
-      mkdir -p .artifacts .testmuai/variables
+            kane-cli design tests \
+              --use-case "$id" \
+              --max 2 \
+              --allow-unreviewed \
+              --mode override
+          done <<< "$ids"
 
-      variable_file=".artifacts/discovered-variables.txt"
+      - name: Verify generated tests
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      find .testmuai/tests \
-        -type f \
-        -name '*_test.md' \
-        -print0 \
-        | xargs -0 grep -hoE '\{\{[A-Za-z_][A-Za-z0-9_-]*\}\}' \
-        | sed -E 's/^\{\{(.*)\}\}$/\1/' \
-        | sort -u \
-        > "$variable_file" || true
-
-      echo "Variables discovered:"
-      cat "$variable_file" || true
-
-  - name: Create assurance variables
-    shell: bash
-    env:
-      FOO_MEDICAL_EMAIL: ${{ secrets.FOO_MEDICAL_EMAIL }}
-      FOO_MEDICAL_PASSWORD: ${{ secrets.FOO_MEDICAL_PASSWORD }}
-    run: |
-      set -euo pipefail
-
-      if [ -z "${FOO_MEDICAL_EMAIL:-}" ]; then
-        echo "Missing GitHub Secret: FOO_MEDICAL_EMAIL"
-        exit 1
-      fi
-
-      if [ -z "${FOO_MEDICAL_PASSWORD:-}" ]; then
-        echo "Missing GitHub Secret: FOO_MEDICAL_PASSWORD"
-        exit 1
-      fi
-
-      python3 <<'PY'
-      import json
-      import os
-
-      variables = {
-          "patient_login_email": {
-              "value": os.environ["FOO_MEDICAL_EMAIL"]
-          },
-          "patient_login_password": {
-              "value": os.environ["FOO_MEDICAL_PASSWORD"],
-              "secret": True
-          },
-          "invalid_login_password": {
-              "value": "ThisIsDefinitelyAnInvalidPassword123!",
-              "secret": True
-          }
-      }
-
-      path = ".testmuai/variables/assurance.json"
-
-      with open(path, "w", encoding="utf-8") as f:
-          json.dump(variables, f, indent=2)
-          f.write("\n")
-
-      print(f"Created {path}")
-      print("Resolved expected variables:")
-      print(" - invalid_login_password: [SECRET]")
-      print(" - patient_login_email: [SECRET]")
-      print(" - patient_login_password: [SECRET]")
-      PY
-
-  - name: Validate generated variable references
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      python3 <<'PY'
-      import json
-      import re
-
-      variable_path = ".testmuai/variables/assurance.json"
-
-      with open(variable_path, "r", encoding="utf-8") as f:
-          variables = json.load(f)
-
-      declared = set(variables.keys())
-      referenced = set()
-
-      for path in __import__("pathlib").Path(".testmuai/tests").rglob("*_test.md"):
-          text = path.read_text(encoding="utf-8")
-          referenced.update(
-              re.findall(r"\{\{([A-Za-z_][A-Za-z0-9_-]*)\}\}", text)
+          mapfile -d '' tests < <(
+            find .testmuai/tests \
+              -type f \
+              -name '*_test.md' \
+              -print0
           )
 
-      print("Referenced variables:")
-      for name in sorted(referenced):
-          print(f" - {name}")
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "ERROR: No generated *_test.md files were found."
+            exit 1
+          fi
 
-      missing = sorted(referenced - declared)
+          echo "Generated ${#tests[@]} test(s):"
 
-      if missing:
-          print("")
-          print("ERROR: Generated tests contain undeclared variables:")
-          for name in missing:
+          for test_file in "${tests[@]}"; do
+            echo " - $test_file"
+          done
+
+      - name: Discover generated variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .artifacts .testmuai/variables
+
+          variable_file=".artifacts/discovered-variables.txt"
+          : > "$variable_file"
+
+          while IFS= read -r -d '' test_file; do
+            grep -hoE '\{\{[A-Za-z_][A-Za-z0-9_-]*\}\}' "$test_file" || true
+          done < <(
+            find .testmuai/tests \
+              -type f \
+              -name '*_test.md' \
+              -print0
+          ) \
+            | sed -E 's/^\{\{(.*)\}\}$/\1/' \
+            | sort -u \
+            > "$variable_file"
+
+          echo "Variables discovered:"
+          cat "$variable_file" || true
+
+      - name: Create assurance variables
+        shell: bash
+        env:
+          FOO_MEDICAL_EMAIL: ${{ secrets.FOO_MEDICAL_EMAIL }}
+          FOO_MEDICAL_PASSWORD: ${{ secrets.FOO_MEDICAL_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${FOO_MEDICAL_EMAIL:-}" ]; then
+            echo "ERROR: Missing GitHub Secret: FOO_MEDICAL_EMAIL"
+            exit 1
+          fi
+
+          if [ -z "${FOO_MEDICAL_PASSWORD:-}" ]; then
+            echo "ERROR: Missing GitHub Secret: FOO_MEDICAL_PASSWORD"
+            exit 1
+          fi
+
+          python3 <<'PY'
+          import json
+          import os
+          import secrets
+
+          actual_password = os.environ["FOO_MEDICAL_PASSWORD"]
+
+          while True:
+              invalid_password = "Invalid_" + secrets.token_urlsafe(32)
+              if invalid_password != actual_password:
+                  break
+
+          variables = {
+              "patient_login_email": {
+                  "value": os.environ["FOO_MEDICAL_EMAIL"],
+                  "secret": True
+              },
+              "patient_login_password": {
+                  "value": actual_password,
+                  "secret": True
+              },
+              "invalid_login_password": {
+                  "value": invalid_password,
+                  "secret": True
+              }
+          }
+
+          path = ".testmuai/variables/assurance.json"
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(variables, f, indent=2)
+              f.write("\n")
+
+          print(f"Created {path}")
+          print("Variables configured:")
+          print(" - patient_login_email: [SECRET]")
+          print(" - patient_login_password: [SECRET]")
+          print(" - invalid_login_password: [RANDOM SECRET]")
+          PY
+
+      - name: Validate generated variable references
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          variable_path = Path(".testmuai/variables/assurance.json")
+
+          if not variable_path.exists():
+              print("ERROR: Variable file was not created.")
+              raise SystemExit(1)
+
+          with variable_path.open("r", encoding="utf-8") as f:
+              variables = json.load(f)
+
+          declared = set(variables.keys())
+          referenced = set()
+
+          test_files = list(Path(".testmuai/tests").rglob("*_test.md"))
+
+          for path in test_files:
+              text = path.read_text(encoding="utf-8")
+              referenced.update(
+                  re.findall(
+                      r"\{\{([A-Za-z_][A-Za-z0-9_-]*)\}\}",
+                      text
+                  )
+              )
+
+          print("Referenced variables:")
+
+          for name in sorted(referenced):
               print(f" - {name}")
-          raise SystemExit(1)
 
-      print("")
-      print("All generated variables are declared.")
-      PY
+          missing = sorted(referenced - declared)
 
-  - name: Author and execute generated tests
-    shell: bash
-    run: |
-      set -euo pipefail
+          if missing:
+              print("")
+              print("ERROR: Generated tests contain undeclared variables:")
+              for name in missing:
+                  print(f" - {name}")
+              raise SystemExit(1)
 
-      while IFS= read -r -d '' test_file; do
-        echo ""
-        echo "============================================================"
-        echo "Authoring: $test_file"
-        echo "============================================================"
+          print("")
+          print("All generated variables are declared.")
+          PY
 
-        kane-cli testmd run "$test_file" \
-          --agent \
-          --headless \
-          --author \
-          --url "$FOO_MEDICAL_URL" \
-          --variables-file ".testmuai/variables/assurance.json" \
-          --on-lock-conflict wait
+      - name: Author generated tests
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      done < <(
-        find .testmuai/tests \
-          -type f \
-          -name '*_test.md' \
-          -print0
-      )
+          while IFS= read -r -d '' test_file; do
+            echo ""
+            echo "============================================================"
+            echo "Authoring: $test_file"
+            echo "============================================================"
 
-  - name: Run generated test suite
-    shell: bash
-    run: |
-      set -euo pipefail
+            kane-cli testmd run "$test_file" \
+              --agent \
+              --headless \
+              --author \
+              --url "$FOO_MEDICAL_URL" \
+              --variables-file ".testmuai/variables/assurance.json" \
+              --on-lock-conflict wait
+          done < <(
+            find .testmuai/tests \
+              -type f \
+              -name '*_test.md' \
+              -print0
+          )
 
-      kane-cli testrun run \
-        --headless \
-        --parallel 2 \
-        --on-failure fail-fast \
-        --variables-file ".testmuai/variables/assurance.json"
+      - name: Run generated test suite
+        shell: bash
+        run: |
+          set -euo pipefail
 
-  - name: Show generated evidence
-    if: always()
-    shell: bash
-    run: |
-      echo "Evidence generated under .testmuai/evidence/"
+          kane-cli testrun run \
+            --headless \
+            --parallel 2 \
+            --on-failure fail-fast \
+            --variables-file ".testmuai/variables/assurance.json"
 
-      find .testmuai/evidence \
-        -maxdepth 2 \
-        -type f \
-        -print 2>/dev/null || true
+      - name: Show generated evidence
+        if: always()
+        shell: bash
+        run: |
+          echo "Evidence generated under .testmuai/evidence/"
 
-  - name: Validate evidence
-    if: success()
-    shell: bash
-    run: |
-      set -euo pipefail
+          if [ -d ".testmuai/evidence" ]; then
+            find .testmuai/evidence \
+              -maxdepth 2 \
+              -type f \
+              -print
+          else
+            echo "Evidence directory does not exist."
+          fi
 
-      shopt -s nullglob
-      packs=(.testmuai/evidence/*.evidence)
+      - name: Validate evidence
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      if [ ${#packs[@]} -eq 0 ]; then
-        echo "No .evidence pack was generated."
-        exit 1
-      fi
+          shopt -s nullglob
+          packs=(.testmuai/evidence/*.evidence)
 
-      validation_failed=0
+          if [ "${#packs[@]}" -eq 0 ]; then
+            echo "ERROR: No .evidence pack was generated."
+            exit 1
+          fi
 
-      for pack in "${packs[@]}"; do
-        echo ""
-        echo "============================================================"
-        echo "Validating evidence pack: $pack"
-        echo "============================================================"
+          validation_failed=0
 
-        if ! kane-cli evidence validate "$pack" --json; then
-          validation_failed=1
-        fi
-      done
+          for pack in "${packs[@]}"; do
+            echo ""
+            echo "============================================================"
+            echo "Validating evidence pack: $pack"
+            echo "============================================================"
 
-      if [ "$validation_failed" -ne 0 ]; then
-        echo "One or more evidence packs failed validation."
-        exit 1
-      fi
+            if ! kane-cli evidence validate "$pack" --json; then
+              validation_failed=1
+            fi
+          done
 
-      echo "All evidence packs passed validation."
+          if [ "$validation_failed" -ne 0 ]; then
+            echo "ERROR: One or more evidence packs failed validation."
+            exit 1
+          fi
 
-  - name: Calculate coverage
-    if: success()
-    shell: bash
-    run: |
-      set -euo pipefail
+          echo "All evidence packs passed validation."
 
-      mkdir -p .artifacts
+      - name: Calculate coverage
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      kane-cli cover --json \
-        | tee .artifacts/coverage.json
+          mkdir -p .artifacts
 
-  - name: Record generated test list
-    if: always()
-    shell: bash
-    run: |
-      find .testmuai/tests \
-        -type f \
-        -name '*_test.md' \
-        -print \
-        | sort \
-        > .artifacts/generated-tests.txt
+          kane-cli cover --json \
+            | tee .artifacts/coverage.json
 
-      echo "Generated tests:"
-      cat .artifacts/generated-tests.txt || true
+      - name: Record generated test list
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .artifacts
 
-  - name: Remove runtime variables
-    if: always()
-    run: |
-      rm -rf .testmuai/variables
+          find .testmuai/tests \
+            -type f \
+            -name '*_test.md' \
+            -print \
+            | sort \
+            > .artifacts/generated-tests.txt
 
-  - name: Upload Assurance artifacts
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: foo-medical-kane-cli-assurance
-      path: |
-        .artifacts/
-        .testmuai/tests/
-        .testmuai/evidence/
-      if-no-files-found: warn
-      retention-days: 14
+          echo "Generated tests:"
+          cat .artifacts/generated-tests.txt || true
 
-  - name: Commit generated tests and evidence
-    if: success() && github.ref == 'refs/heads/main'
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Remove runtime variables
+        if: always()
+        shell: bash
+        run: |
+          rm -rf .testmuai/variables
 
-      git config user.name "github-actions[bot]"
-      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Upload Assurance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo-medical-kane-cli-assurance
+          path: |
+            .artifacts/
+            .testmuai/tests/
+            .testmuai/evidence/
+          if-no-files-found: warn
+          retention-days: 14
 
-      git add .testmuai/tests .testmuai/evidence .artifacts
+      - name: Commit generated tests and evidence
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      if git diff --cached --quiet; then
-        echo "No generated changes to commit."
-        exit 0
-      fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      git commit -m "chore: update KaneCLI assurance artifacts"
-      git push
-```
+          git add \
+            .testmuai/tests \
+            .testmuai/evidence \
+            .artifacts
+
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update KaneCLI assurance artifacts"
+          git push
