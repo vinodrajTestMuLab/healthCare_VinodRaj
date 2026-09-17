@@ -226,7 +226,7 @@ jobs:
                   "value": actual_password,
                   "secret": True
               },
-              "invalid_login_password": {
+              "invalid_patient_password": {
                   "value": invalid_password,
                   "secret": True
               }
@@ -242,7 +242,7 @@ jobs:
           print("Variables configured:")
           print(" - patient_login_email: [SECRET]")
           print(" - patient_login_password: [SECRET]")
-          print(" - invalid_login_password: [RANDOM SECRET]")
+          print(" - invalid_patient_password: [RANDOM SECRET]")
           PY
 
       - name: Validate generated variable references
