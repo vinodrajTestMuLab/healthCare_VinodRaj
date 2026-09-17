@@ -1,37 +1,36 @@
-# Foo Medical — KaneCLI Login Assurance Demo
+# Foo Medical — Kane CLI Assurance Demo
 
-A minimal Foo Medical demonstration showing how **TestMu AI KaneCLI** can turn a product requirement into an executable browser test and produce Assurance evidence.
+A healthcare patient portal demonstration application used to showcase **Kane CLI Assurance**, automated browser testing, evidence generation, and GitHub Actions CI.
 
-## Demo Flow
+> **Important:** Foo Medical is a demonstration application that uses synthetic healthcare information. It is not intended for real patient care or real PHI.
 
-```text
-PRD
- ↓
-Use Case
- ↓
-Acceptance Criterion
- ↓
-Generated Test
- ↓
-Browser Execution
- ↓
-Evidence
- ↓
-Coverage
-```
+## Application
 
-## What This Demo Tests
+**Foo Medical:** https://foomedical.com/
 
-Only one workflow is in scope:
+Foo Medical provides a patient-portal / EHR-style experience with:
 
-**Open Foo Medical → Sign in with valid patient credentials → Verify the patient dashboard is visible**
+- Patient authentication
+- Patient dashboard
+- Profile and contact information
+- Medical conditions
+- Medications
+- Allergies
+- Laboratory results
+- Vital signs
+- Appointments
+- Appointment scheduling and cancellation
+- Patient-provider messaging
+- Healthcare documents
+- Notifications
+- Global search
+- Responsive and accessible workflows
 
-The goal is to demonstrate the KaneCLI Assurance lifecycle with the smallest practical example.
-
-## Files
+## Repository Structure
 
 ```text
-.
+foo-medical/
+│
 ├── requirements/
 │   └── foo-medical-prd.md
 │
@@ -39,107 +38,535 @@ The goal is to demonstrate the KaneCLI Assurance lifecycle with the smallest pra
 │   └── workflows/
 │       └── foo-medical-kane-assurance.yml
 │
-├── .testmuai/
-│   ├── tests/
-│   └── evidence/
-│
-├── .artifacts/
-│
 └── README.md
 ```
 
-### Source of Truth
+The repository intentionally starts with only the **product PRD** and **GitHub Actions workflow**.
 
-`requirements/foo-medical-prd.md` is the product requirement used by KaneCLI.
+Kane CLI is responsible for creating and working with the generated test assets during the Assurance workflow.
 
-It intentionally contains only one use case and one acceptance criterion.
+## Product Context
 
-### Generated Tests
+The product requirements are maintained in:
 
-KaneCLI generates the browser test under:
+```text
+requirements/foo-medical-prd.md
+```
 
-`.testmuai/tests/`
+The PRD describes the product itself rather than a test plan. It contains:
 
-The first run authors the generated test in a real browser. Subsequent runs can replay the recorded test.
+- Product overview
+- Personas
+- Product modules
+- User journeys
+- Healthcare entities
+- Sample synthetic patients
+- Providers
+- Business rules
+- Application behavior
+- Error and empty states
+- Accessibility expectations
+- Responsive behavior
+- Healthcare/FHIR concepts
 
-### Evidence
+This gives Kane CLI the product context required to understand what Foo Medical is expected to do.
 
-After a successful run, KaneCLI creates a sealed `.evidence` pack under:
+## Kane CLI Assurance Flow
 
-`.testmuai/evidence/`
+The GitHub Actions workflow follows this lifecycle:
 
-The workflow validates the pack and uploads it as a GitHub Actions artifact.
+```text
+                Foo Medical PRD
+                      │
+                      ▼
+              Context Ingestion
+                      │
+                      ▼
+             Use Case Extraction
+                      │
+                      ▼
+               Test Design
+                      │
+                      ▼
+              Generated Tests
+                      │
+                      ▼
+            Initial Test Authoring
+                      │
+                      ▼
+             Test Suite Execution
+                      │
+                      ▼
+                Evidence Pack
+                      │
+                      ▼
+             Evidence Validation
+                      │
+                      ▼
+                Coverage Report
+                      │
+                      ▼
+             GitHub Actions Artifact
+```
 
-### Coverage
+The important concept is that the workflow starts with **product requirements** and ends with **execution evidence and assurance coverage**.
 
-The workflow exports coverage to:
+## GitHub Actions Workflow
 
-`.artifacts/coverage.json`
+The workflow is:
 
-This is generated after successful execution.
+```text
+.github/workflows/foo-medical-kane-assurance.yml
+```
+
+It runs on:
+
+- Pull requests
+- Pushes to `main`
+- Manual `workflow_dispatch`
+
+### Workflow stages
+
+#### 1. Checkout
+
+GitHub checks out the repository.
+
+#### 2. Node.js setup
+
+The workflow uses Node.js 22.
+
+#### 3. Kane CLI installation
+
+```bash
+npm install -g @testmuai/kane-cli
+```
+
+#### 4. Kane skill installation
+
+```bash
+kane-cli install skill
+```
+
+#### 5. Authentication
+
+Kane CLI authenticates using GitHub Actions secrets.
+
+#### 6. Product context ingestion
+
+The Foo Medical PRD is supplied to Kane CLI.
+
+```text
+requirements/foo-medical-prd.md
+```
+
+#### 7. Use-case extraction
+
+Kane CLI extracts product use cases from the PRD.
+
+Examples include:
+
+- Patient login
+- Patient dashboard
+- Review laboratory results
+- Review medications
+- Schedule appointment
+- Cancel appointment
+- Send provider message
+- Access documents
+
+#### 8. Test design
+
+Kane CLI designs executable tests from the extracted use cases.
+
+The generated tests cover relevant product behavior rather than requiring the repository to contain hand-written test cases initially.
+
+#### 9. Initial authoring
+
+Generated tests are authored against the Foo Medical application.
+
+```text
+https://foomedical.com/
+```
+
+#### 10. Assurance execution
+
+The generated tests are executed as a suite.
+
+The workflow uses:
+
+```bash
+kane-cli testrun run
+```
+
+#### 11. Evidence
+
+Kane CLI generates evidence under:
+
+```text
+.testmuai/evidence/
+```
+
+#### 12. Evidence validation
+
+The workflow validates generated `.evidence` packs.
+
+A validation failure causes the GitHub Actions job to fail.
+
+#### 13. Coverage
+
+The workflow generates an assurance coverage result with:
+
+```bash
+kane-cli cover
+```
+
+#### 14. Artifact upload
+
+Evidence, generated tests, coverage information, and supporting artifacts are uploaded to GitHub Actions.
 
 ## GitHub Secrets
 
-Configure these repository secrets before running the workflow:
+The workflow expects these repository secrets:
 
 ```text
 LT_USERNAME
 LT_ACCESS_KEY
-FOO_MEDICAL_EMAIL
-FOO_MEDICAL_PASSWORD
 ```
 
-The Foo Medical credentials are supplied only at runtime and are not stored in the repository.
+Configure them in:
 
-## Run the Demo
+```text
+GitHub Repository
+  → Settings
+  → Secrets and variables
+  → Actions
+  → Repository secrets
+```
 
-The workflow is manual-only.
+Do **not** commit credentials to the repository.
 
-In GitHub:
+The workflow references the secrets as:
 
-**Actions → Foo Medical - KaneCLI Assurance → Run workflow**
+```yaml
+env:
+  LT_USERNAME: ${{ secrets.LT_USERNAME }}
+  LT_ACCESS_KEY: ${{ secrets.LT_ACCESS_KEY }}
+```
 
-The workflow then:
+## Running the Workflow
 
-1. Installs KaneCLI.
-2. Logs in to TestMu AI.
-3. Ingests the PRD.
-4. Extracts the use case.
-5. Designs one browser test.
-6. Supplies the patient credentials securely.
-7. Authors and executes the test.
-8. Validates the evidence pack.
-9. Calculates coverage.
-10. Uploads the generated outputs.
+### Automatic
 
-## Application Under Test
+Create a pull request or push a commit to:
 
-Foo Medical:
+```text
+main
+```
 
+GitHub Actions automatically starts the workflow.
+
+### Manual
+
+Go to:
+
+```text
+GitHub
+  → Actions
+  → Foo Medical - Kane CLI Assurance
+  → Run workflow
+```
+
+## What the Workflow Creates
+
+The repository begins with:
+
+```text
+requirements/foo-medical-prd.md
+.github/workflows/foo-medical-kane-assurance.yml
+README.md
+```
+
+During execution, Kane CLI creates/uses additional assets such as:
+
+```text
+.context/
+.testmuai/
+├── tests/
+└── evidence/
+```
+
+The exact generated files depend on the extracted use cases and execution.
+
+## Evidence
+
+The primary evidence directory is:
+
+```text
+.testmuai/evidence/
+```
+
+The evidence is used to establish what happened during execution.
+
+The GitHub Actions workflow uploads this evidence as an artifact named:
+
+```text
+foo-medical-kane-cli-assurance
+```
+
+From the completed workflow run, select:
+
+```text
+Summary
+  → Artifacts
+  → foo-medical-kane-cli-assurance
+```
+
+## Assurance Demonstration
+
+A typical demonstration can be presented as:
+
+### 1. Start with the product
+
+Show:
+
+```text
 https://foomedical.com/
+```
 
-Foo Medical is an open-source healthcare sample application from the Medplum team.
+Explain the patient portal and the healthcare workflows.
 
-## Why This Demo Is Small
+### 2. Show the PRD
 
-This repository is designed to show the Assurance concept without introducing unnecessary test data or workflow complexity.
+Open:
 
-The demo intentionally excludes appointments, messaging, medications, laboratory workflows, registration, API testing, backend testing, and multi-patient scenarios.
+```text
+requirements/foo-medical-prd.md
+```
 
-## Core Message
+Explain that the product requirements are the source of truth.
 
-The demonstration is not simply about generating a browser test.
+### 3. Run GitHub Actions
 
-It shows the chain:
+Open the workflow:
 
-**What should the product do? → What should be verified? → Did it work? → Where is the evidence?**
+```text
+.github/workflows/foo-medical-kane-assurance.yml
+```
 
-## Upstream Project
+Show the pipeline progressing through context ingestion, use-case extraction, test generation, authoring, execution, evidence validation, and coverage.
 
-Foo Medical:
+### 4. Show generated tests
 
-https://github.com/medplum/foomedical
+Show the generated Kane test assets after the workflow creates them.
 
-Medplum:
+### 5. Show execution
 
-https://www.medplum.com/
+Show the workflow executing the healthcare scenarios.
+
+### 6. Show evidence
+
+Download/open the GitHub Actions artifact and show the generated evidence.
+
+### 7. Show coverage
+
+Use the coverage output to explain which product requirements/use cases were exercised and what the execution established.
+
+## Recommended Demo Scenarios
+
+The strongest initial Foo Medical scenarios are:
+
+### Patient Login
+
+```text
+Open Foo Medical
+    ↓
+Enter valid patient credentials
+    ↓
+Sign in
+    ↓
+Open Dashboard
+    ↓
+Verify patient identity
+```
+
+### Laboratory Results
+
+```text
+Login
+    ↓
+Open Laboratory Results
+    ↓
+Search/filter results
+    ↓
+Open a result
+    ↓
+Review test name, value, unit and date
+```
+
+### Appointment Scheduling
+
+```text
+Login
+    ↓
+Appointments
+    ↓
+Schedule Appointment
+    ↓
+Select provider
+    ↓
+Select appointment type
+    ↓
+Select date
+    ↓
+Select available time
+    ↓
+Confirm
+    ↓
+Verify appointment
+```
+
+### Appointment Cancellation
+
+```text
+Upcoming Appointment
+    ↓
+Open appointment
+    ↓
+Cancel
+    ↓
+Confirm
+    ↓
+Verify Cancelled status
+```
+
+### Patient Data Isolation
+
+```text
+Login as Patient A
+    ↓
+Attempt to access Patient B data
+    ↓
+Verify access is denied
+```
+
+This scenario is particularly useful because it demonstrates healthcare-specific authorization behavior rather than only UI navigation.
+
+## Why This Demo
+
+Traditional automation often starts with individual scripts.
+
+This demo starts with the **product definition**:
+
+```text
+What should Foo Medical do?
+          ↓
+Understand the product
+          ↓
+Identify use cases
+          ↓
+Create executable tests
+          ↓
+Run the tests
+          ↓
+Capture evidence
+          ↓
+Measure assurance/coverage
+```
+
+The value of the demonstration is therefore broader than simply showing that an AI can automate browser actions.
+
+It shows a path from **product intent to executable validation and evidence**.
+
+## Synthetic Data
+
+The demo uses synthetic patients such as:
+
+### Maya Chen
+
+```text
+Patient ID: P001
+DOB: 1987-04-14
+Provider: Dr. Sarah Wilson
+```
+
+Example information includes:
+
+- Hypertension
+- Seasonal allergic rhinitis
+- Migraine history
+- Medications
+- Penicillin allergy
+- Laboratory results
+- Vital signs
+
+### Daniel Brooks
+
+```text
+Patient ID: P002
+DOB: 1979-09-21
+Provider: Dr. Michael Lee
+```
+
+P002 provides a second synthetic identity for demonstrating patient-specific data separation.
+
+## Prerequisites
+
+Before running the workflow:
+
+1. A GitHub repository containing this project.
+2. A valid TestMu AI/LambdaTest username.
+3. A valid TestMu AI/LambdaTest access key.
+4. The GitHub Actions secrets configured as:
+   - `LT_USERNAME`
+   - `LT_ACCESS_KEY`
+5. Network access from the GitHub Actions runner to the Foo Medical application.
+
+## Troubleshooting
+
+### No tests are generated
+
+Check that the PRD exists at:
+
+```text
+requirements/foo-medical-prd.md
+```
+
+Also review the context extraction and test-design steps in the Actions log.
+
+### `testrun_plan` contains zero members
+
+This normally means executable test assets were not generated/available before `testrun run`.
+
+Review:
+
+```text
+context ingestion
+use-case extraction
+test design
+test generation
+```
+
+before investigating the execution step.
+
+### No evidence pack is generated
+
+Check the first failing step before `Validate evidence packs`.
+
+If the test suite did not execute successfully, no final evidence pack may be available.
+
+### Authentication failure
+
+Verify:
+
+```text
+LT_USERNAME
+LT_ACCESS_KEY
+```
+
+exist as GitHub repository secrets and that the values are correct.
+
+## Project Goal
+
+The goal of this repository is to provide a compact, reproducible demonstration of:
+
+**Foo Medical product context + Kane CLI Assurance + GitHub Actions + executable tests + evidence + coverage.**
